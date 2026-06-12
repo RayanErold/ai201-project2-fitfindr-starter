@@ -14,7 +14,7 @@ You must have at least 3 tools. The three required tools are listed — add any 
 
 ### Tool 1: search_listings
 
-**What it does:**
+**What it does:*aFilters the mock datasets for relevant items*
 <!-- Describe what this tool does in 1–2 sentences -->
 
 **Input parameters:**
@@ -23,17 +23,17 @@ You must have at least 3 tools. The three required tools are listed — add any 
 - `size` (str): ...
 - `max_price` (float): ...
 
-**What it returns:**
+**What it returns:*A list of dictionary objects represneting clothing items *
 <!-- Describe the return value — what fields does a result contain? -->
 
-**What happens if it fails or returns nothing:**
+**What happens if it fails or returns nothing:*If no items match, return an empty list `[]`. The planning loop will detect this to prevent downstream errors.*
 <!-- What should the agent do if no listings match? -->
 
 ---
 
 ### Tool 2: suggest_outfit
 
-**What it does:**
+**What it does:*Generates styling adviced based on a new item and existing wardrobe *
 <!-- Describe what this tool does in 1–2 sentences -->
 
 **Input parameters:**
@@ -41,32 +41,47 @@ You must have at least 3 tools. The three required tools are listed — add any 
 - `new_item` (dict): ...
 - `wardrobe` (dict): ...
 
-**What it returns:**
+**What it returns:* A formatted string containing outfit suggestions*
 <!-- Describe the return value -->
 
-**What happens if it fails or returns nothing:**
+**What happens if it fails or returns nothing:*If `wardrobe` is empty, the LLM should be prompted to provide general style tips instead of failing, returning a helpful string rather than an exception.*
 <!-- What should the agent do if the wardrobe is empty or no outfit can be suggested? -->
 
 ---
 
 ### Tool 3: create_fit_card
 
-**What it does:**
+**What it does:*Creates a social media-ready caption*
 <!-- Describe what this tool does in 1–2 sentences -->
 
 **Input parameters:**
 <!-- List each parameter, its type, and what it represents -->
 - `outfit` (...): ...
 
-**What it returns:**
+**What it returns:*A creative, shareable caption (str).*
 <!-- Describe the return value -->
 
-**What happens if it fails or returns nothing:**
+**What happens if it fails or returns nothing:*If outfit is empty or None, return a default string: "Couldn't generate a fit card, but this item is a great find!"*
 <!-- What should the agent do if the outfit data is incomplete? -->
 
 ---
 
 ### Additional Tools (if any)
+## Price_Comparison
+**What it does:*Determine if the item is a "good deal" by comparing its price to the average price of similar items (same category or style) in the dataset.
+
+Inputs:*
+<!-- Describe what this tool does in 1–2 sentences -->
+
+**Input parameters:**
+<!-- List each parameter, its type, and what it represents -->
+- `item` (dict): ...
+- `listings`
+**What it returns:*A string indicating the result (e.g., "Fair Price," "Great Deal," or "Expensive") and a brief explanation (e.g., "This is 20% below the average price for similar vintage tees")*
+<!-- Describe the return value -->
+
+**What happens if it fails or returns nothing:*If no comparable listings exist (e.g., the category is unique), return "Insufficient data to determine price fairness."*
+<!-- What should the agent do if the outfit data is incomplete? -->
 
 <!-- Copy the block above for any tools beyond the required three -->
 
@@ -76,7 +91,15 @@ You must have at least 3 tools. The three required tools are listed — add any 
 
 **How does your agent decide which tool to call next?**
 <!-- Describe the logic your planning loop uses. What does it look at? What conditions change its behavior? How does it know when it's done? -->
+The planning loop operates sequentially. It first calls`search_listings` executes first. If no items match, the agent halts with a specific error message.
 
+If an item is found, the agent proceeds to `price_comparison`, calculating if the item is a 'Great Deal' or 'Expensive' relative to the dataset.
+
+This price verdict is stored in the session state.
+
+`suggest_outfit` uses the selected item to generate style advice.
+
+Finally, `create_fit_card` consumes the outfit suggestion and the stored price verdict to build a comprehensive caption. This ensures the user receives both style and financial value insights in the final output
 ---
 
 ## State Management
@@ -109,6 +132,19 @@ For each tool, describe the specific failure mode you're handling and what the a
      sketch are all fine. You'll share this diagram with an AI tool when asking it to implement
      the planning loop and each individual tool. -->
 
+     graph TD
+    User([User Query]) --> Planner{Planning Loop}
+    Planner -->|Search| Search[search_listings]
+    
+    Search -->|Results Found| State1[Store selected_item in Session]
+    Search -->|Empty Results| Error1[Set Error Message & Exit]
+    
+    State1 --> Suggest[suggest_outfit]
+    Suggest -->|Suggestion| State2[Store outfit_suggestion in Session]
+    
+    State2 --> Card[create_fit_card]
+    Card -->|Fit Card| Final([Return Session State])
+
 ---
 
 ## AI Tool Plan
@@ -124,10 +160,30 @@ For each tool, describe the specific failure mode you're handling and what the a
      search_listings() using load_listings() from the data loader — then test it against 3 queries
      before trusting it" is a plan. -->
 
-**Milestone 3 — Individual tool implementations:**
 
-**Milestone 4 — Planning loop and state management:**
+**Milestone 3 — Individual tool implementations:*
+- AI Tool: Claude 3.5 Sonnet,
+- Strategy&Input: Provide `planning.md` tool specs. Prompt: "Implement this tool in   `tools.py` using `load_listings()`. Include strict type checking and handle the failure mode by returning an empty list/default string, not raising exceptions."
+- Verification: Run `pytest tests/test_tools.py`. If any test fails, feed the error back to Claude.
+*
 
+**Milestone 4 — Planning loop and state management:*
+ - AI Tool: Claude 3.5 Sonnet,
+- Strategy&Input: Provide the `## Architecture` mermaid diagram and `## Planning Loop logic`. Prompt: "Implement run_agent() in agent.py. Ensure the logic halts execution if `search_listings` returns an empty list, and passes the `selected_item` and `price_verdict` through the session state
+."
+- Verification: Inspect `session` state with `print()` statements to verify data flow between tools.
+*
+**Milestone 5 — Error Handling:*
+AI Tool: Gemini/copilot,
+- Strategy&Input:Prompt: "Here is my `tools.py`. Generate 3 test cases in `tests/test_tools.py` that trigger the failure modes I defined (e.g., empty wardrobe, impossible search).
+."
+- Verification: Execute `pytest` and ensure the agent returns the expected user-friendly error string instead of crashing.
+*
+**Milestone 6 — Documentation:*
+AI Tool: Gemini/copilot,
+- Strategy&Input:Prompt: Prompt: "Write a professional README.md for this agent. Include the tool inventory, explain the planning loop logic, and summarize my AI usage (provide the specific instances below)."
+."
+- Verification:Manually review for tone and ensure the README matches the actual code signatures.
 ---
 
 ## A Complete Interaction (Step by Step)
