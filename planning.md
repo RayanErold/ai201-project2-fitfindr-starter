@@ -136,14 +136,20 @@ Write out what a full user interaction looks like from start to finish — tool 
 
 **Example user query:** "I'm looking for a vintage graphic tee under $30. I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it?"
 
-**Step 1:**
+**Step 1:*Searching for Items *
 <!-- What does the agent do first? Which tool is called? With what input? -->
+1. The agent parses the user's natural language to extract parameters. It calls `search_listings(description="vintage graphic tee", size="M", max_price=30.0)`. The tools accesses `data/listings.json` using `load_listings()` and returns a list of dictionaries matching these criteria.
+**If results are found: The agent stores the top result (the item dictionary) in the session state as selected_item.
 
-**Step 2:**
+**If no results are found: The agent terminates the loop and informs the user: "I couldn't find any graphic tees in that price range and size. Try removing the size filter or increasing your budget."
+
+**Step 2:* Suggesting an Outfit *
 <!-- What happens next? What was returned from step 1? What tool is called now? -->
+With the selected_item now in the session state, the agent calls      `suggest_outfit(new_item=session['selected_item'], wardrobe=get_example_wardrobe())`. This tool sends the new item and the user's existing wardrobe items to the LLM. The LLM processes the combination and returns a text string containing specific styling advice (e.g., "Pair this with your wide-leg jeans..."). This string is saved to the session state as  `outfit_suggestion`.
 
-**Step 3:**
+**Step 3:* Generating the Fit Card*
 <!-- Continue until the full interaction is complete -->
-
-**Final output to user:**
+Finally, the agent calls `create_fit_card(outfit=session['outfit_suggestion'], new_item=session['selected_item'])`. This tool takes the styling advice and the item details to generate a short, social-media-ready caption. This final string is saved to the session state as `fit_card`.
+**Final output to user:* Response to the user query*
 <!-- What does the user actually see at the end? -->
+The user sees a response containing the details of the item found, the personalized styling advice, and the final shareable "Fit Card" caption: "Thrifted this faded band tee off Depop for $22 and honestly it was made for my wide-legs 🖤 full look in my stories"
