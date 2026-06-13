@@ -13,6 +13,7 @@ Tools:
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -20,6 +21,9 @@ from groq import Groq
 from utils.data_loader import load_listings
 
 load_dotenv()
+
+# Model used for the two LLM-backed tools.
+_MODEL = "llama-3.3-70b-versatile"
 
 
 # ── Groq client ───────────────────────────────────────────────────────────────
@@ -32,6 +36,11 @@ def _get_groq_client():
             "GROQ_API_KEY not set. Add it to a .env file in the project root."
         )
     return Groq(api_key=api_key)
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase a string and split it into alphanumeric word tokens."""
+    return re.findall(r"[a-z0-9]+", text.lower())
 
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
@@ -69,8 +78,51 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    listings = load_listings()
+
+    keywords = _tokenize(description or "")
+    scored: list[tuple[int, dict]] = []
+
+    for item in listings:
+        # 1. Price filter (inclusive).
+        if max_price is not None and item.get("price", 0) > max_price:
+            continue
+
+        # 2. Size filter — case-insensitive, token-based so "M" matches "S/M".
+        if size is not None:
+            wanted = size.strip().lower()
+            item_size = str(item.get("size", "")).lower()
+            size_tokens = re.split(r"[\s/]+", item_size)
+            if wanted not in size_tokens and wanted not in item_size:
+                continue
+
+        # 3. Score by keyword overlap against the item's searchable text.
+        haystack_parts = [
+            item.get("title", ""),
+            item.get("description", ""),
+            item.get("category", ""),
+            item.get("brand") or "",
+            " ".join(item.get("style_tags", [])),
+            " ".join(item.get("colors", [])),
+        ]
+        haystack = _tokenize(" ".join(haystack_parts))
+        haystack_set = set(haystack)
+
+        # Distinct keywords matched is the primary score; total occurrences
+        # break ties so a more on-topic listing ranks higher.
+        distinct = sum(1 for kw in set(keywords) if kw in haystack_set)
+        occurrences = sum(haystack.count(kw) for kw in keywords)
+        score = distinct * 1000 + occurrences
+
+        # 4. Drop listings with no keyword overlap.
+        if distinct == 0:
+            continue
+
+        scored.append((score, item))
+
+    # 5. Sort by score, highest first.
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in scored]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -100,8 +152,57 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    client = _get_groq_client()
+
+    # Describe the thrifted item for the prompt.
+    item_desc = (
+        f"{new_item.get('title', 'an item')} "
+        f"(category: {new_item.get('category', 'n/a')}, "
+        f"colors: {', '.join(new_item.get('colors', [])) or 'n/a'}, "
+        f"style: {', '.join(new_item.get('style_tags', [])) or 'n/a'})"
+    )
+
+    items = (wardrobe or {}).get("items", [])
+
+    if not items:
+        # Empty wardrobe → general styling advice, never crash.
+        prompt = (
+            f"A shopper is considering buying this thrifted item:\n{item_desc}\n\n"
+            "They have not entered any wardrobe items yet. Give friendly, general "
+            "styling advice: what kinds of pieces pair well with it, what vibe it "
+            "suits, and 1-2 example outfit ideas built around common staples. "
+            "Keep it to a short paragraph or two."
+        )
+    else:
+        # Format the wardrobe so the LLM can reference pieces by name.
+        wardrobe_lines = []
+        for w in items:
+            wardrobe_lines.append(
+                f"- {w.get('name', 'item')} "
+                f"({w.get('category', 'n/a')}; "
+                f"{', '.join(w.get('colors', [])) or 'n/a'})"
+            )
+        wardrobe_text = "\n".join(wardrobe_lines)
+        prompt = (
+            f"A shopper is considering buying this thrifted item:\n{item_desc}\n\n"
+            f"Here is their existing wardrobe:\n{wardrobe_text}\n\n"
+            "Suggest 1-2 complete outfits that combine the new item with specific "
+            "named pieces from their wardrobe. Reference the wardrobe pieces by "
+            "name and explain why each outfit works. Keep it concise and friendly."
+        )
+
+    response = client.chat.completions.create(
+        model=_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are FitFindr, a warm, knowledgeable personal stylist.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.7,
+    )
+    return response.choices[0].message.content.strip()
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -133,5 +234,43 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    # 1. Guard against an empty / whitespace-only outfit string.
+    if not outfit or not outfit.strip():
+        return (
+            "Couldn't generate a fit card — no outfit suggestion was provided, "
+            "but this item is a great find!"
+        )
+
+    title = new_item.get("title", "this thrifted piece")
+    price = new_item.get("price")
+    price_str = f"${price:g}" if isinstance(price, (int, float)) else "a steal"
+    platform = new_item.get("platform", "the resale app")
+
+    prompt = (
+        "Write a short, shareable OOTD-style social media caption (2-4 sentences).\n\n"
+        f"Item: {title}\n"
+        f"Price: {price_str}\n"
+        f"Platform: {platform}\n"
+        f"Outfit / styling: {outfit}\n\n"
+        "Guidelines:\n"
+        "- Sound casual and authentic, like a real OOTD post — not a product listing.\n"
+        f"- Mention the item name, the price ({price_str}), and the platform "
+        f"({platform}) naturally, once each.\n"
+        "- Capture the outfit's vibe in specific terms.\n"
+        "- A tasteful emoji or two is fine. Return only the caption text."
+    )
+
+    client = _get_groq_client()
+    response = client.chat.completions.create(
+        model=_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": "You write fun, authentic thrift-haul captions for social media.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        # Higher temperature so repeated calls on the same input vary.
+        temperature=1.0,
+    )
+    return response.choices[0].message.content.strip()
